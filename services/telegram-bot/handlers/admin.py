@@ -214,8 +214,8 @@ async def setup_admin_password(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def _count_admins_with_login(db_path: str) -> int:
-    from db.queries import _get_conn
-    async with await _get_conn(db_path) as conn:
+    from db.queries import _db
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             "SELECT COUNT(*) FROM users WHERE is_admin=1 AND admin_login IS NOT NULL;"
         )
@@ -698,4 +698,5 @@ def build_admin_handler() -> ConversationHandler:
         fallbacks=[CommandHandler("cancel", cancel_admin)],
         per_user=True,
         per_chat=True,
+        per_message=False,
     )

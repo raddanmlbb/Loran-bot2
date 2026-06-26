@@ -3,20 +3,23 @@ db/queries.py — асинхронные SQL-запросы для LORAN.CYBER B
 """
 
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 import aiosqlite
 
 logger = logging.getLogger(__name__)
 
 
-async def _get_conn(db_path: str) -> aiosqlite.Connection:
-    conn = await aiosqlite.connect(db_path)
-    conn.row_factory = aiosqlite.Row
-    await conn.execute("PRAGMA foreign_keys = ON;")
-    await conn.execute("PRAGMA journal_mode = WAL;")
-    return conn
+@asynccontextmanager
+async def _db(db_path: str) -> AsyncIterator[aiosqlite.Connection]:
+    """Контекстный менеджер: открывает соединение, настраивает прагмы, закрывает."""
+    async with aiosqlite.connect(db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        await conn.execute("PRAGMA foreign_keys = ON;")
+        await conn.execute("PRAGMA journal_mode = WAL;")
+        yield conn
 
 
 # ===========================================================================
@@ -24,7 +27,7 @@ async def _get_conn(db_path: str) -> aiosqlite.Connection:
 # ===========================================================================
 
 async def get_user(db_path: str, telegram_id: int) -> Optional[aiosqlite.Row]:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             "SELECT * FROM users WHERE telegram_id = ?;", (telegram_id,)
         )
@@ -32,7 +35,7 @@ async def get_user(db_path: str, telegram_id: int) -> Optional[aiosqlite.Row]:
 
 
 async def get_user_by_login(db_path: str, login: str) -> Optional[aiosqlite.Row]:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             "SELECT * FROM users WHERE LOWER(login) = LOWER(?);", (login,)
         )
@@ -40,7 +43,7 @@ async def get_user_by_login(db_path: str, login: str) -> Optional[aiosqlite.Row]
 
 
 async def get_user_by_senet_login(db_path: str, senet_login: str) -> Optional[aiosqlite.Row]:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             "SELECT * FROM users WHERE LOWER(senet_login) = LOWER(?);", (senet_login,)
         )
@@ -55,7 +58,7 @@ async def create_user(
     phone: Optional[str] = None,
     is_admin: bool = False,
 ) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             """
             INSERT INTO users (telegram_id, login, display_name, phone, is_admin)
@@ -67,7 +70,7 @@ async def create_user(
 
 
 async def update_last_activity(db_path: str, telegram_id: int) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             "UPDATE users SET last_activity = CURRENT_TIMESTAMP WHERE telegram_id = ?;",
             (telegram_id,),
@@ -76,7 +79,7 @@ async def update_last_activity(db_path: str, telegram_id: int) -> None:
 
 
 async def set_user_admin(db_path: str, telegram_id: int) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             """
             INSERT INTO users (telegram_id, login, is_admin)
@@ -89,7 +92,7 @@ async def set_user_admin(db_path: str, telegram_id: int) -> None:
 
 
 async def ban_user(db_path: str, telegram_id: int, reason: str, admin_id: int) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             "UPDATE users SET status='banned', banned_reason=? WHERE telegram_id=?;",
             (reason, telegram_id),
@@ -98,7 +101,7 @@ async def ban_user(db_path: str, telegram_id: int, reason: str, admin_id: int) -
 
 
 async def unban_user(db_path: str, telegram_id: int) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             "UPDATE users SET status='active', banned_reason=NULL WHERE telegram_id=?;",
             (telegram_id,),
@@ -107,7 +110,7 @@ async def unban_user(db_path: str, telegram_id: int) -> None:
 
 
 async def get_all_users(db_path: str, limit: int = 50, offset: int = 0) -> list:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             "SELECT * FROM users ORDER BY registered_at DESC LIMIT ? OFFSET ?;",
             (limit, offset),
@@ -117,7 +120,7 @@ async def get_all_users(db_path: str, limit: int = 50, offset: int = 0) -> list:
 
 async def search_users(db_path: str, query: str, limit: int = 20) -> list:
     like = f"%{query}%"
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             """
             SELECT * FROM users
@@ -130,7 +133,7 @@ async def search_users(db_path: str, query: str, limit: int = 20) -> list:
 
 
 async def count_users(db_path: str) -> int:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute("SELECT COUNT(*) FROM users;")
         row = await cursor.fetchone()
         return row[0] if row else 0
@@ -148,7 +151,7 @@ async def save_pending_registration(
     display_name: Optional[str],
     expires_at: datetime,
 ) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             """
             INSERT INTO pending_registrations (telegram_id, login, display_name, phone, expires_at)
@@ -166,7 +169,7 @@ async def save_pending_registration(
 
 
 async def get_pending_registration(db_path: str, telegram_id: int) -> Optional[aiosqlite.Row]:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             """
             SELECT * FROM pending_registrations
@@ -178,7 +181,7 @@ async def get_pending_registration(db_path: str, telegram_id: int) -> Optional[a
 
 
 async def clear_pending_registration(db_path: str, telegram_id: int) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             "DELETE FROM pending_registrations WHERE telegram_id = ?;", (telegram_id,)
         )
@@ -190,7 +193,7 @@ async def clear_pending_registration(db_path: str, telegram_id: int) -> None:
 # ===========================================================================
 
 async def increment_senet_verify_attempts(db_path: str, telegram_id: int) -> int:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             "UPDATE users SET senet_verify_attempts = senet_verify_attempts + 1 WHERE telegram_id = ?;",
             (telegram_id,),
@@ -205,7 +208,7 @@ async def increment_senet_verify_attempts(db_path: str, telegram_id: int) -> int
 
 
 async def lock_senet_verification(db_path: str, telegram_id: int, locked_until: datetime) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             "UPDATE users SET senet_verify_locked_until = ? WHERE telegram_id = ?;",
             (locked_until.isoformat(), telegram_id),
@@ -214,7 +217,7 @@ async def lock_senet_verification(db_path: str, telegram_id: int, locked_until: 
 
 
 async def reset_senet_verify_attempts(db_path: str, telegram_id: int) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             """
             UPDATE users
@@ -232,7 +235,7 @@ async def link_senet_user(
     senet_user_id: str,
     senet_login: str,
 ) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             """
             UPDATE users
@@ -255,7 +258,7 @@ async def save_verification_code(
     senet_login: str,
     expires_at: datetime,
 ) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             """
             INSERT INTO verification_codes (code, telegram_id, senet_login, expires_at)
@@ -267,7 +270,7 @@ async def save_verification_code(
 
 
 async def get_pending_verification_codes(db_path: str) -> list:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             """
             SELECT vc.*, u.login FROM verification_codes vc
@@ -280,7 +283,7 @@ async def get_pending_verification_codes(db_path: str) -> list:
 
 
 async def mark_verification_code_used(db_path: str, code: str) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             """
             UPDATE verification_codes
@@ -293,7 +296,7 @@ async def mark_verification_code_used(db_path: str, code: str) -> None:
 
 
 async def reject_verification_code(db_path: str, code: str) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             "UPDATE verification_codes SET status='rejected' WHERE code=?;",
             (code,),
@@ -313,7 +316,7 @@ async def create_booking(
     time_to: str,
     total_price: int,
 ) -> int:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             """
             INSERT INTO bookings (telegram_id, date, time_from, time_to, total_price)
@@ -326,7 +329,7 @@ async def create_booking(
 
 
 async def update_booking_code(db_path: str, booking_id: int, code: str) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             "UPDATE bookings SET booking_code = ? WHERE id = ?;",
             (code, booking_id),
@@ -341,7 +344,7 @@ async def add_booking_pc(
     zone: str,
     price_per_pc: int,
 ) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             "INSERT INTO booking_pcs (booking_id, pc_id, zone, price_per_pc) VALUES (?, ?, ?, ?);",
             (booking_id, pc_id, zone, price_per_pc),
@@ -350,7 +353,7 @@ async def add_booking_pc(
 
 
 async def get_booking_by_code(db_path: str, code: str) -> Optional[aiosqlite.Row]:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             "SELECT * FROM bookings WHERE booking_code = ?;", (code,)
         )
@@ -363,7 +366,7 @@ async def cancel_booking(
     cancelled_by: str,
     reason: str = "",
 ) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             """
             UPDATE bookings
@@ -377,7 +380,7 @@ async def cancel_booking(
 
 
 async def get_bookings_for_user(db_path: str, telegram_id: int, status: str = "confirmed") -> list:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             """
             SELECT b.*, GROUP_CONCAT(bp.pc_id) as pc_list
@@ -393,7 +396,7 @@ async def get_bookings_for_user(db_path: str, telegram_id: int, status: str = "c
 
 
 async def count_active_pcs(db_path: str, telegram_id: int) -> int:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             """
             SELECT COUNT(bp.pc_id) FROM bookings b
@@ -417,7 +420,7 @@ async def check_pc_conflicts(
     if not pc_ids:
         return []
     placeholders = ",".join("?" * len(pc_ids))
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             f"""
             SELECT DISTINCT bp.pc_id FROM bookings b
@@ -452,7 +455,7 @@ async def get_all_bookings(
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     params += [limit, offset]
 
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             f"""
             SELECT b.*, u.login, u.phone,
@@ -472,7 +475,7 @@ async def get_all_bookings(
 
 async def get_todays_stats(db_path: str) -> dict:
     """Статистика для дашборда — брони на сегодня, выручка, загрузка ПК."""
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cur = await conn.execute(
             """
             SELECT COUNT(*) as booking_count,
@@ -501,7 +504,7 @@ async def get_todays_stats(db_path: str) -> dict:
 
 
 async def get_bookings_count_by_day(db_path: str, days: int = 7) -> list:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             """
             SELECT date, COUNT(*) as count, COALESCE(SUM(total_price), 0) as revenue
@@ -515,7 +518,7 @@ async def get_bookings_count_by_day(db_path: str, days: int = 7) -> list:
 
 
 async def get_top_clients(db_path: str, limit: int = 10) -> list:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             """
             SELECT u.login, u.phone, COUNT(b.id) as booking_count,
@@ -530,7 +533,7 @@ async def get_top_clients(db_path: str, limit: int = 10) -> list:
 
 
 async def get_top_pcs(db_path: str, limit: int = 10) -> list:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             """
             SELECT bp.pc_id, bp.zone, COUNT(*) as usage_count
@@ -557,7 +560,7 @@ async def upsert_pricing(
     fixed_end: Optional[str] = None,
     is_popular: bool = False,
 ) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             """
             INSERT INTO pricing (zone, package_id, price, hours, fixed_start, fixed_end, is_popular, updated_at)
@@ -573,7 +576,7 @@ async def upsert_pricing(
 
 
 async def get_all_pricing(db_path: str) -> list:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             "SELECT * FROM pricing WHERE is_active=1 ORDER BY zone, package_id;"
         )
@@ -581,7 +584,7 @@ async def get_all_pricing(db_path: str) -> list:
 
 
 async def get_price(db_path: str, zone: str, package_id: str) -> Optional[int]:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             "SELECT price FROM pricing WHERE zone=? AND package_id=? AND is_active=1;",
             (zone, package_id),
@@ -595,7 +598,7 @@ async def get_price(db_path: str, zone: str, package_id: str) -> Optional[int]:
 # ===========================================================================
 
 async def get_club_contacts(db_path: str) -> Optional[aiosqlite.Row]:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute("SELECT * FROM club_contacts WHERE id=1;")
         return await cursor.fetchone()
 
@@ -608,7 +611,7 @@ async def update_club_contacts(
     instagram: Optional[str] = None,
     updated_by: Optional[int] = None,
 ) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             """
             UPDATE club_contacts
@@ -637,7 +640,7 @@ async def log_admin_action(
     target_id: str = "",
     details: str = "",
 ) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             """
             INSERT INTO admin_logs (admin_id, action, target_type, target_id, details)
@@ -649,7 +652,7 @@ async def log_admin_action(
 
 
 async def get_admin_logs(db_path: str, limit: int = 50) -> list:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             """
             SELECT al.*, u.login as admin_login
@@ -673,7 +676,7 @@ async def set_admin_credentials(
     password_hash: str,
     admin_level: str = "regular",
 ) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             """
             UPDATE users
@@ -686,7 +689,7 @@ async def set_admin_credentials(
 
 
 async def get_admin_by_login(db_path: str, admin_login: str) -> Optional[aiosqlite.Row]:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         cursor = await conn.execute(
             "SELECT * FROM users WHERE LOWER(admin_login)=LOWER(?) AND is_admin=1;",
             (admin_login,),
@@ -695,7 +698,7 @@ async def get_admin_by_login(db_path: str, admin_login: str) -> Optional[aiosqli
 
 
 async def increment_admin_login_attempts(db_path: str, telegram_id: int) -> int:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             "UPDATE users SET admin_login_attempts=admin_login_attempts+1 WHERE telegram_id=?;",
             (telegram_id,),
@@ -710,7 +713,7 @@ async def increment_admin_login_attempts(db_path: str, telegram_id: int) -> int:
 
 
 async def lock_admin_login(db_path: str, telegram_id: int, locked_until: datetime) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             "UPDATE users SET admin_locked_until=? WHERE telegram_id=?;",
             (locked_until.isoformat(), telegram_id),
@@ -719,9 +722,22 @@ async def lock_admin_login(db_path: str, telegram_id: int, locked_until: datetim
 
 
 async def reset_admin_login_attempts(db_path: str, telegram_id: int) -> None:
-    async with await _get_conn(db_path) as conn:
+    async with _db(db_path) as conn:
         await conn.execute(
             "UPDATE users SET admin_login_attempts=0, admin_locked_until=NULL WHERE telegram_id=?;",
             (telegram_id,),
         )
         await conn.commit()
+
+
+# ===========================================================================
+# Совместимость: оставляем _get_conn для handlers/admin.py (_count_admins_with_login)
+# ===========================================================================
+
+async def _get_conn(db_path: str):
+    """
+    Устаревший хелпер. Используйте контекстный менеджер _db() напрямую.
+    Оставлен только для обратной совместимости с inline-запросами в handlers/admin.py.
+    """
+    conn = aiosqlite.connect(db_path)
+    return conn
