@@ -443,6 +443,13 @@ async def _handle_booking(
     )
     await update_last_activity(db_path, telegram_id)
 
+    # Этап 7: проверить, не пора ли предложить указать ДР
+    try:
+        from services.birthday import check_and_ask_birthday
+        await check_and_ask_birthday(context.bot, db_path, telegram_id)
+    except Exception:
+        logger.exception("Ошибка check_and_ask_birthday для tid=%d", telegram_id)
+
 
 # ---------------------------------------------------------------------------
 # action: "cancel_booking"

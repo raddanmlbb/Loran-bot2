@@ -731,6 +731,91 @@ async def reset_admin_login_attempts(db_path: str, telegram_id: int) -> None:
 
 
 # ===========================================================================
+# Дни рождения (Этап 7)
+# ===========================================================================
+
+async def count_confirmed_bookings(db_path: str, telegram_id: int) -> int:
+    """Возвращает число завершённых (confirmed/done) броней пользователя."""
+    async with _db(db_path) as conn:
+        cursor = await conn.execute(
+            """
+            SELECT COUNT(*) AS cnt FROM bookings
+            WHERE telegram_id=? AND status IN ('confirmed','done','active');
+            """,
+            (telegram_id,),
+        )
+        row = await cursor.fetchone()
+        return row["cnt"] if row else 0
+
+
+async def update_birthday_asked(db_path: str, telegram_id: int) -> None:
+    """Обновляет дату последнего запроса дня рождения и счётчик."""
+    async with _db(db_path) as conn:
+        await conn.execute(
+            """
+            UPDATE users
+            SET birthday_asked_at=DATE('now'), birthday_ask_count=birthday_ask_count+1
+            WHERE telegram_id=?;
+            """,
+            (telegram_id,),
+        )
+        await conn.commit()
+
+
+async def set_birthday_declined(db_path: str, telegram_id: int, forever: bool = False) -> None:
+    """Устанавливает флаг отказа: 1 — пропустить 30 дней, 2 — никогда."""
+    level = 2 if forever else 1
+    async with _db(db_path) as conn:
+        await conn.execute(
+            "UPDATE users SET birthday_declined=? WHERE telegram_id=?;",
+            (level, telegram_id),
+        )
+        await conn.commit()
+
+
+async def set_birthday(db_path: str, telegram_id: int, bday_iso: str, source: str = "user") -> None:
+    """Сохраняет дату рождения пользователя."""
+    async with _db(db_path) as conn:
+        await conn.execute(
+            """
+            UPDATE users
+            SET birthday=?, birthday_source=?, birthday_declined=0
+            WHERE telegram_id=?;
+            """,
+            (bday_iso, source, telegram_id),
+        )
+        await conn.commit()
+
+
+async def get_todays_birthdays(db_path: str) -> list:
+    """
+    Возвращает пользователей, у которых сегодня день рождения.
+    Фильтр: birthday IS NOT NULL, status='active', совпадение месяца и дня.
+    """
+    async with _db(db_path) as conn:
+        cursor = await conn.execute(
+            """
+            SELECT telegram_id, login, last_birthday_bonus
+            FROM users
+            WHERE birthday IS NOT NULL
+              AND status='active'
+              AND strftime('%m-%d', birthday) = strftime('%m-%d', 'now');
+            """
+        )
+        return await cursor.fetchall()
+
+
+async def set_last_birthday_bonus(db_path: str, telegram_id: int, date_iso: str) -> None:
+    """Фиксирует дату последнего полученного поздравления."""
+    async with _db(db_path) as conn:
+        await conn.execute(
+            "UPDATE users SET last_birthday_bonus=? WHERE telegram_id=?;",
+            (date_iso, telegram_id),
+        )
+        await conn.commit()
+
+
+# ===========================================================================
 # Совместимость: оставляем _get_conn для handlers/admin.py (_count_admins_with_login)
 # ===========================================================================
 

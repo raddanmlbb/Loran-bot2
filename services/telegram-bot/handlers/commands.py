@@ -113,6 +113,12 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         registered_raw: Optional[str] = db_user["registered_at"]
         registered_date = registered_raw[:10] if registered_raw else "неизвестно"
 
+        bday_raw: Optional[str] = db_user["birthday"]
+        bday_str = (
+            bday_raw[8:10].lstrip("0") + "." + bday_raw[5:7] + "." + bday_raw[:4]
+            if bday_raw else None
+        )
+
         lines = [
             MESSAGES["profile_header"].format(login=login),
             "",
@@ -121,7 +127,13 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             MESSAGES["profile_status"].format(status=status),
             MESSAGES["profile_registered"].format(date=registered_date),
         ]
-        await update.message.reply_text("\n".join(lines))
+        if bday_str:
+            lines.append(f"🎂 <b>День рождения:</b> {bday_str}")
+        elif db_user["birthday_declined"] != 2:
+            lines.append("")
+            lines.append(MESSAGES["bday_hint_profile"])
+
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
         await update_last_activity(db_path, telegram_id)
 
     except Exception:

@@ -30,6 +30,7 @@ from telegram.ext import (
 from config import Config, load_config
 from db.migrations import run_migrations
 from handlers.admin import build_admin_handler
+from handlers.birthday import build_birthday_handler, build_bday_inline_handler
 from handlers.commands import cmd_help, cmd_profile, cmd_start
 from handlers.messages import (
     handle_address,
@@ -74,6 +75,26 @@ async def _job_sync_prices(context) -> None:
         logger.info("Цены успешно обновлены из Senet (фоновая задача).")
     else:
         logger.warning("Не удалось обновить цены из Senet, используется кэш.")
+
+
+async def _job_birthday_greetings(context) -> None:
+    """Ежедневная задача: поздравления именинников."""
+    from services.birthday import run_birthday_greetings
+    db_path: str = context.bot_data["db_path"]
+    try:
+        await run_birthday_greetings(context.bot, db_path)
+    except Exception:
+        logger.exception("Ошибка в _job_birthday_greetings")
+
+
+async def _job_backup(context) -> None:
+    """Ежедневная задача: резервное копирование БД."""
+    from services.backup import run_backup
+    db_path: str = context.bot_data["db_path"]
+    try:
+        await run_backup(context.bot, db_path)
+    except Exception:
+        logger.exception("Ошибка в _job_backup")
 
 
 async def _job_scheduled_broadcasts(context) -> None:
@@ -122,6 +143,11 @@ def _register_handlers(app: Application) -> None:
     """
     # Этап 5: ConversationHandler для /admin
     app.add_handler(build_admin_handler())
+
+    # Этап 7: ConversationHandler для /birthday (ввод даты рождения)
+    app.add_handler(build_birthday_handler())
+    # Inline-кнопки bday_later / bday_never (вне диалога)
+    app.add_handler(build_bday_inline_handler())
 
     # Команды
     app.add_handler(CommandHandler("start",   cmd_start))
@@ -202,6 +228,11 @@ def main() -> None:
         app.job_queue.run_repeating(_job_sync_prices, interval=3600, first=3605)
         # Проверка запланированных рассылок каждую минуту
         app.job_queue.run_repeating(_job_scheduled_broadcasts, interval=60, first=30)
+        # Поздравления именинников — каждый день в 08:00 UTC (13:00 Астана)
+        from datetime import time as dtime
+        app.job_queue.run_daily(_job_birthday_greetings, time=dtime(hour=8, minute=0))
+        # Резервное копирование — каждый день в 03:00 UTC (08:00 Астана)
+        app.job_queue.run_daily(_job_backup, time=dtime(hour=3, minute=0))
         logger.info("Фоновые задачи зарегистрированы.")
     else:
         logger.warning("job_queue недоступен — автообновление цен и рассылки отключены.")

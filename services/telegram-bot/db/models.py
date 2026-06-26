@@ -280,6 +280,31 @@ MIGRATION_V4: list[str] = [
     *INDEXES_V4,
 ]
 
+# Этап 7: таблица промокодов ко дням рождения
+BIRTHDAY_PROMOS_TABLE: str = """
+CREATE TABLE IF NOT EXISTS birthday_promos (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    code        TEXT UNIQUE NOT NULL,
+    year        INTEGER NOT NULL,
+    discount    INTEGER DEFAULT 20,
+    expires_at  DATE NOT NULL,
+    used_at     TIMESTAMP,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
+);
+"""
+
+INDEXES_V5: list[str] = [
+    "CREATE INDEX IF NOT EXISTS idx_birthday_promos_tid  ON birthday_promos(telegram_id);",
+    "CREATE INDEX IF NOT EXISTS idx_birthday_promos_code ON birthday_promos(code);",
+]
+
+MIGRATION_V5: list[str] = [
+    BIRTHDAY_PROMOS_TABLE,
+    *INDEXES_V5,
+]
+
 MIGRATION_V1: list[str] = [
     SCHEMA_VERSION_TABLE,
     USERS_TABLE,

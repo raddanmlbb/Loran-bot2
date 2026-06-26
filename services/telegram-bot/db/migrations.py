@@ -7,7 +7,7 @@ import os
 import sqlite3
 from typing import Dict, List
 
-from db.models import MIGRATION_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4
+from db.models import MIGRATION_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +16,7 @@ MIGRATIONS: Dict[int, List[str]] = {
     2: MIGRATION_V2,
     3: MIGRATION_V3,
     4: MIGRATION_V4,
+    5: MIGRATION_V5,
 }
 
 LATEST_VERSION: int = max(MIGRATIONS.keys())
