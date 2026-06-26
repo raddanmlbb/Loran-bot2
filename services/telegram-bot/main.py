@@ -76,6 +76,36 @@ async def _job_sync_prices(context) -> None:
         logger.warning("Не удалось обновить цены из Senet, используется кэш.")
 
 
+async def _job_scheduled_broadcasts(context) -> None:
+    """
+    Фоновая задача: каждую минуту проверяет запланированные рассылки
+    и запускает те, время которых подошло.
+    """
+    from db.queries_posts import get_pending_scheduled_broadcasts
+    from handlers.admin import _broadcast_job
+
+    db_path: str = context.bot_data["db_path"]
+
+    try:
+        due = await get_pending_scheduled_broadcasts(db_path)
+        for bc in due:
+            bid = bc["id"]
+            job_name = f"broadcast_{bid}"
+            # Не запускать повторно если уже в очереди
+            existing = context.job_queue.get_jobs_by_name(job_name)
+            if existing:
+                continue
+            logger.info("Запускаю запланированную рассылку #%d", bid)
+            context.job_queue.run_once(
+                _broadcast_job,
+                when=1,
+                data={"broadcast_id": bid, "chat_id": None, "message_id": None},
+                name=job_name,
+            )
+    except Exception:
+        logger.exception("Ошибка в _job_scheduled_broadcasts")
+
+
 # ---------------------------------------------------------------------------
 # Регистрация хендлеров
 # ---------------------------------------------------------------------------
@@ -170,9 +200,11 @@ def main() -> None:
         app.job_queue.run_once(_job_sync_prices, when=5)
         # Затем каждый час
         app.job_queue.run_repeating(_job_sync_prices, interval=3600, first=3605)
+        # Проверка запланированных рассылок каждую минуту
+        app.job_queue.run_repeating(_job_scheduled_broadcasts, interval=60, first=30)
         logger.info("Фоновые задачи зарегистрированы.")
     else:
-        logger.warning("job_queue недоступен — автообновление цен отключено.")
+        logger.warning("job_queue недоступен — автообновление цен и рассылки отключены.")
 
     logger.info("Бот запускается в режиме polling...")
 

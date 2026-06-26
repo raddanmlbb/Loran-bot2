@@ -65,7 +65,17 @@ logger = logging.getLogger(__name__)
     AWAIT_CONTACT_VALUE,
     SETUP_ADMIN_LOGIN,
     SETUP_ADMIN_PASSWORD,
-) = range(9)
+    # Этап 6: создание новостей/акций
+    POST_TITLE,
+    POST_BODY,
+    POST_IMAGE,
+    POST_BTN_TEXT,
+    POST_BTN_ACTION,
+    POST_PROMO,
+    POST_DATES,
+    # Этап 6: рассылка
+    BROADCAST_SCHEDULE,
+) = range(17)
 
 # Максимум попыток входа перед блокировкой
 MAX_LOGIN_ATTEMPTS: int = 3
@@ -90,10 +100,12 @@ def _check_password(password: str, hashed: str) -> bool:
 def _main_menu_keyboard(is_chief: bool = False) -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton("📊 Дашборд", callback_data="adm_dashboard")],
-        [InlineKeyboardButton("📅 Брони", callback_data="adm_bookings")],
-        [InlineKeyboardButton("👥 Клиенты", callback_data="adm_clients")],
-        [InlineKeyboardButton("🔑 Запросы Senet", callback_data="adm_senet_requests")],
-        [InlineKeyboardButton("📈 Статистика", callback_data="adm_stats")],
+        [InlineKeyboardButton("📅 Брони", callback_data="adm_bookings"),
+         InlineKeyboardButton("👥 Клиенты", callback_data="adm_clients")],
+        [InlineKeyboardButton("📰 Новости", callback_data="adm_news"),
+         InlineKeyboardButton("📣 Рассылка", callback_data="adm_broadcast")],
+        [InlineKeyboardButton("🔑 Senet-запросы", callback_data="adm_senet_requests"),
+         InlineKeyboardButton("📈 Статистика", callback_data="adm_stats")],
         [InlineKeyboardButton("📞 Контакты клуба", callback_data="adm_contacts")],
     ]
     if is_chief:
@@ -330,6 +342,59 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await _show_manage_admins(query, db_path)
         else:
             await query.edit_message_text("❌ Только главный администратор.")
+    # ---- Этап 6: Новости ----
+    elif data == "adm_news":
+        await _show_news_menu(query, db_path)
+    elif data in ("adm_create_news", "adm_create_promo"):
+        post_type = "news" if data == "adm_create_news" else "promo"
+        context.user_data["new_post"] = {"type": post_type}
+        await query.edit_message_text("📝 Введите заголовок:")
+        return POST_TITLE
+    elif data.startswith("adm_publish_post_"):
+        post_id = int(data.split("adm_publish_post_")[1])
+        from db.queries_posts import publish_post
+        await publish_post(db_path, post_id)
+        await log_admin_action(db_path, tid, "post_publish", "post", str(post_id))
+        await query.edit_message_text(f"✅ Новость #{post_id} опубликована.")
+    elif data.startswith("adm_delete_post_"):
+        post_id = int(data.split("adm_delete_post_")[1])
+        from db.queries_posts import delete_post
+        await delete_post(db_path, post_id)
+        await log_admin_action(db_path, tid, "post_delete", "post", str(post_id))
+        await query.edit_message_text("🗑 Запись удалена.")
+    elif data == "adm_news_drafts":
+        await _show_posts_list(query, db_path, status="draft", title="Черновики")
+    elif data == "adm_news_published":
+        await _show_posts_list(query, db_path, status="published", title="Опубликованные")
+    # ---- Этап 6: Рассылка ----
+    elif data == "adm_broadcast":
+        await _show_broadcast_menu(query, db_path)
+    elif data.startswith("adm_bcast_post_"):
+        post_id = int(data.split("adm_bcast_post_")[1])
+        context.user_data["broadcast_post_id"] = post_id
+        await _show_broadcast_group_select(query)
+    elif data.startswith("adm_bcast_group_"):
+        group = data.split("adm_bcast_group_")[1]
+        context.user_data["broadcast_group"] = group
+        await _show_broadcast_timing(query)
+    elif data == "adm_bcast_now":
+        await _start_broadcast_now(query, context, db_path)
+        return MAIN_MENU
+    elif data == "adm_bcast_schedule":
+        await query.edit_message_text(
+            "Введите дату и время по Астане (UTC+5):\n"
+            "Формат: ДД.ММ.ГГГГ ЧЧ:ММ\n"
+            "Например: 27.06.2026 18:00"
+        )
+        return BROADCAST_SCHEDULE
+    elif data == "adm_broadcast_history":
+        await _show_broadcast_history(query, db_path)
+    # ---- Этап 6: Сохранение поста ----
+    elif data == "adm_post_save_draft":
+        await _handle_save_post(query, context, db_path, "draft")
+    elif data == "adm_post_save_pub":
+        await _handle_save_post(query, context, db_path, "published")
+    # ---- Общие ----
     elif data == "adm_logout":
         context.user_data.clear()
         await log_admin_action(db_path, tid, "admin_logout")
@@ -651,6 +716,498 @@ async def _show_manage_admins(query, db_path: str) -> None:
     )
 
 
+# ===========================================================================
+# Этап 6: Новости — создание (ConversationHandler states)
+# ===========================================================================
+
+async def post_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.message is None:
+        return POST_TITLE
+    title = update.message.text.strip()
+    if len(title) < 3 or len(title) > 200:
+        await update.message.reply_text("❌ Заголовок: от 3 до 200 символов. Введите ещё раз:")
+        return POST_TITLE
+    context.user_data.setdefault("new_post", {})["title"] = title
+    await update.message.reply_text("📝 Введите текст новости (основной блок):")
+    return POST_BODY
+
+
+async def post_body(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.message is None:
+        return POST_BODY
+    body = update.message.text.strip()
+    if len(body) < 3:
+        await update.message.reply_text("❌ Текст слишком короткий. Введите ещё раз:")
+        return POST_BODY
+    context.user_data["new_post"]["body"] = body
+    await update.message.reply_text(
+        "🖼 Вставьте ссылку на обложку (картинка, прямая ссылка)\n"
+        "Или «-» чтобы пропустить:"
+    )
+    return POST_IMAGE
+
+
+async def post_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.message is None:
+        return POST_IMAGE
+    text = update.message.text.strip()
+    context.user_data["new_post"]["image_url"] = None if text == "-" else text
+    await update.message.reply_text(
+        "🔘 Введите текст кнопки под постом\n"
+        "Или «-» чтобы пропустить:"
+    )
+    return POST_BTN_TEXT
+
+
+async def post_btn_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.message is None:
+        return POST_BTN_TEXT
+    text = update.message.text.strip()
+    if text == "-":
+        context.user_data["new_post"]["button_text"] = None
+        context.user_data["new_post"]["button_action"] = None
+        return await _after_button(update, context)
+    context.user_data["new_post"]["button_text"] = text
+    await update.message.reply_text(
+        "🔗 Введите действие кнопки:\n"
+        "• <code>booking</code> — форма бронирования\n"
+        "• <code>price</code> — прайс-лист\n"
+        "• <code>https://...</code> — ссылка\n",
+        parse_mode="HTML"
+    )
+    return POST_BTN_ACTION
+
+
+async def post_btn_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.message is None:
+        return POST_BTN_ACTION
+    action = update.message.text.strip()
+    if action not in ("booking", "price") and not action.startswith("http"):
+        await update.message.reply_text(
+            "❌ Укажите: booking, price, или https://...\n"
+            "Или «-» чтобы убрать кнопку:"
+        )
+        return POST_BTN_ACTION
+    context.user_data["new_post"]["button_action"] = action if action != "-" else None
+    return await _after_button(update, context)
+
+
+async def _after_button(update, context) -> int:
+    """Следующий шаг после выбора кнопки — зависит от типа поста."""
+    post_type = context.user_data.get("new_post", {}).get("type", "news")
+    if post_type == "promo":
+        await update.message.reply_text(
+            "🎟 Введите промокод (или «-» — без промокода):"
+        )
+        return POST_PROMO
+    else:
+        return await _save_post_ask(update, context)
+
+
+async def post_promo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.message is None:
+        return POST_PROMO
+    text = update.message.text.strip()
+    context.user_data["new_post"]["promo_code"] = None if text == "-" else text
+    await update.message.reply_text(
+        "📅 Введите срок действия акции:\n"
+        "Формат: ГГГГ-ММ-ДД ГГГГ-ММ-ДД (начало конец)\n"
+        "Или «-» — без ограничений:"
+    )
+    return POST_DATES
+
+
+async def post_dates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.message is None:
+        return POST_DATES
+    text = update.message.text.strip()
+    if text == "-":
+        context.user_data["new_post"]["starts_at"] = None
+        context.user_data["new_post"]["expires_at"] = None
+    else:
+        parts = text.split()
+        if len(parts) != 2:
+            await update.message.reply_text(
+                "❌ Формат: ГГГГ-ММ-ДД ГГГГ-ММ-ДД\nПопробуйте снова:"
+            )
+            return POST_DATES
+        context.user_data["new_post"]["starts_at"] = parts[0]
+        context.user_data["new_post"]["expires_at"] = parts[1]
+    return await _save_post_ask(update, context)
+
+
+async def _save_post_ask(update, context) -> int:
+    """Показывает превью поста и кнопки «Сохранить как черновик» / «Опубликовать»."""
+    p = context.user_data.get("new_post", {})
+    lines = [
+        f"<b>Готово! Превью:</b>",
+        f"Тип: {'Акция' if p.get('type') == 'promo' else 'Новость'}",
+        f"Заголовок: {escape(p.get('title', ''))}",
+        f"Текст: {escape((p.get('body') or '')[:100])}...",
+    ]
+    if p.get("image_url"):
+        lines.append(f"Обложка: {p['image_url']}")
+    if p.get("button_text"):
+        lines.append(f"Кнопка: {p['button_text']} → {p.get('button_action')}")
+    if p.get("promo_code"):
+        lines.append(f"Промокод: {p['promo_code']}")
+    if p.get("expires_at"):
+        lines.append(f"Срок: {p.get('starts_at')} – {p.get('expires_at')}")
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💾 Черновик", callback_data="adm_post_save_draft"),
+            InlineKeyboardButton("🚀 Опубликовать", callback_data="adm_post_save_pub"),
+        ],
+        [InlineKeyboardButton("❌ Отменить", callback_data="adm_back")],
+    ])
+    await update.message.reply_text(
+        "\n".join(lines), parse_mode="HTML", reply_markup=keyboard
+    )
+    return MAIN_MENU
+
+
+# Сохранение поста через callback из MAIN_MENU
+async def _handle_save_post(
+    query, context, db_path: str, status: str
+) -> None:
+    from db.queries_posts import create_post
+    tid = context.user_data.get("admin_telegram_id")
+    p = context.user_data.pop("new_post", {})
+    if not p:
+        await query.edit_message_text("❌ Данные не найдены. Начните создание заново.")
+        return
+    post_id = await create_post(
+        db_path=db_path,
+        admin_id=tid,
+        post_type=p.get("type", "news"),
+        title=p.get("title", ""),
+        body=p.get("body", ""),
+        image_url=p.get("image_url"),
+        button_text=p.get("button_text"),
+        button_action=p.get("button_action"),
+        promo_code=p.get("promo_code"),
+        starts_at=p.get("starts_at"),
+        expires_at=p.get("expires_at"),
+        status=status,
+    )
+    label = "черновик" if status == "draft" else "новость"
+    await query.edit_message_text(
+        f"✅ Сохранено как {label}. ID: #{post_id}",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("↩️ В меню", callback_data="adm_back")]
+        ]),
+    )
+
+
+# ===========================================================================
+# Этап 6: Рассылка — scheduling
+# ===========================================================================
+
+async def broadcast_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обрабатывает ввод даты/времени для отложенной рассылки."""
+    if update.message is None:
+        return BROADCAST_SCHEDULE
+
+    import re
+    from datetime import timezone, timedelta
+
+    text = update.message.text.strip()
+    # Формат: ДД.ММ.ГГГГ ЧЧ:ММ
+    match = re.match(r"^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})$", text)
+    if not match:
+        await update.message.reply_text(
+            "❌ Неверный формат. Используйте ДД.ММ.ГГГГ ЧЧ:ММ\n"
+            "Например: 27.06.2026 18:00"
+        )
+        return BROADCAST_SCHEDULE
+
+    day, month, year, hour, minute = [int(x) for x in match.groups()]
+    try:
+        # Астана = UTC+5
+        from datetime import datetime
+        astana_tz = timezone(timedelta(hours=5))
+        dt_astana = datetime(year, month, day, hour, minute, tzinfo=astana_tz)
+        dt_utc = dt_astana.astimezone(timezone.utc)
+    except ValueError:
+        await update.message.reply_text("❌ Неверная дата. Попробуйте снова:")
+        return BROADCAST_SCHEDULE
+
+    if dt_utc <= datetime.now(timezone.utc):
+        await update.message.reply_text("❌ Дата уже прошла. Введите будущую дату:")
+        return BROADCAST_SCHEDULE
+
+    db_path: str = context.bot_data["db_path"]
+    tid = context.user_data.get("admin_telegram_id")
+    post_id: int = context.user_data.get("broadcast_post_id")
+    group: str = context.user_data.get("broadcast_group", "all")
+
+    from db.queries_posts import create_broadcast, get_recipients
+    recipients = await get_recipients(db_path, group)
+    broadcast_id = await create_broadcast(
+        db_path=db_path,
+        admin_id=tid,
+        post_id=post_id,
+        target_group=group,
+        scheduled_at=dt_utc.isoformat(),
+        total_recipients=len(recipients),
+    )
+
+    dt_label = dt_astana.strftime("%d.%m.%Y %H:%M")
+    group_labels = {"all": "Все", "active": "Активные", "bootcamp": "BOOTCAMP", "newbie": "Новички"}
+    await update.message.reply_text(
+        f"⏰ Рассылка #{broadcast_id} запланирована на {dt_label} (Астана)\n"
+        f"Группа: {group_labels.get(group, group)}, ~{len(recipients)} чел.",
+        reply_markup=_main_menu_keyboard(_is_chief(context)),
+    )
+    return MAIN_MENU
+
+
+# ===========================================================================
+# Этап 6: Show-функции для новостей и рассылки
+# ===========================================================================
+
+async def _show_news_menu(query, db_path: str) -> None:
+    from db.queries_posts import list_posts
+    posts = await list_posts(db_path, limit=5)
+    draft_count = sum(1 for p in posts if p["status"] == "draft")
+    pub_count = sum(1 for p in posts if p["status"] == "published")
+
+    text = (
+        f"📰 <b>Новости и акции</b>\n\n"
+        f"Черновиков: {draft_count}\n"
+        f"Опубликовано: {pub_count}\n"
+    )
+    buttons = [
+        [InlineKeyboardButton("✏️ Создать новость", callback_data="adm_create_news"),
+         InlineKeyboardButton("🎁 Создать акцию", callback_data="adm_create_promo")],
+        [InlineKeyboardButton("📋 Черновики", callback_data="adm_news_drafts"),
+         InlineKeyboardButton("📢 Опубликованные", callback_data="adm_news_published")],
+        [InlineKeyboardButton("↩️ Назад", callback_data="adm_back")],
+    ]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def _show_posts_list(query, db_path: str, status: str, title: str) -> None:
+    from db.queries_posts import list_posts
+    posts = await list_posts(db_path, status=status, limit=8)
+
+    type_icon = {"news": "📰", "promo": "🎁"}
+    lines = [f"📋 <b>{title}</b>\n"]
+    buttons = []
+
+    if not posts:
+        lines.append("Нет записей.")
+    for p in posts:
+        icon = type_icon.get(p["type"], "📄")
+        lines.append(f"{icon} #{p['id']} {escape(p['title'][:40])}")
+        row = []
+        if p["status"] == "draft":
+            row.append(InlineKeyboardButton(
+                f"🚀 Опубликовать #{p['id']}",
+                callback_data=f"adm_publish_post_{p['id']}"
+            ))
+        row.append(InlineKeyboardButton(
+            f"🗑 #{p['id']}",
+            callback_data=f"adm_delete_post_{p['id']}"
+        ))
+        buttons.append(row)
+
+    buttons.append([InlineKeyboardButton("↩️ Назад", callback_data="adm_news")])
+    await query.edit_message_text(
+        "\n".join(lines), parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+async def _show_broadcast_menu(query, db_path: str) -> None:
+    from db.queries_posts import list_posts, list_broadcasts
+    posts = await list_posts(db_path, status="published", limit=5)
+    broadcasts = await list_broadcasts(db_path, limit=3)
+
+    text = "📣 <b>Рассылка</b>\n\n"
+    if broadcasts:
+        text += "Последние рассылки:\n"
+        status_icon = {"done": "✅", "sending": "📤", "pending": "⏳", "scheduled": "⏰", "failed": "❌"}
+        for b in broadcasts:
+            icon = status_icon.get(b["status"], "•")
+            total = b["total_recipients"] or 0
+            sent = b["sent_count"] or 0
+            text += f"{icon} #{b['id']} {escape((b['post_title'] or '')[:30])} ({sent}/{total})\n"
+        text += "\n"
+
+    if not posts:
+        text += "⚠️ Нет опубликованных новостей.\nСначала создайте новость в разделе 📰."
+        buttons = [
+            [InlineKeyboardButton("📰 Перейти к новостям", callback_data="adm_news")],
+            [InlineKeyboardButton("↩️ Назад", callback_data="adm_back")],
+        ]
+    else:
+        text += "Выберите новость для рассылки:"
+        post_buttons = []
+        for p in posts:
+            icon = "📰" if p["type"] == "news" else "🎁"
+            post_buttons.append([InlineKeyboardButton(
+                f"{icon} #{p['id']} {p['title'][:35]}",
+                callback_data=f"adm_bcast_post_{p['id']}"
+            )])
+        post_buttons.append([InlineKeyboardButton("📜 История рассылок", callback_data="adm_broadcast_history")])
+        post_buttons.append([InlineKeyboardButton("↩️ Назад", callback_data="adm_back")])
+        buttons = post_buttons
+
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def _show_broadcast_group_select(query) -> None:
+    text = "👥 <b>Выберите группу получателей:</b>"
+    buttons = [
+        [InlineKeyboardButton("🌍 Все", callback_data="adm_bcast_group_all")],
+        [InlineKeyboardButton("🔥 Активные (30 дней)", callback_data="adm_bcast_group_active")],
+        [InlineKeyboardButton("💪 BOOTCAMP", callback_data="adm_bcast_group_bootcamp")],
+        [InlineKeyboardButton("🆕 Новички (<3 брони)", callback_data="adm_bcast_group_newbie")],
+        [InlineKeyboardButton("↩️ Назад", callback_data="adm_broadcast")],
+    ]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def _show_broadcast_timing(query) -> None:
+    text = "⏰ <b>Когда отправить?</b>"
+    buttons = [
+        [InlineKeyboardButton("🚀 Сейчас", callback_data="adm_bcast_now")],
+        [InlineKeyboardButton("📅 По расписанию", callback_data="adm_bcast_schedule")],
+        [InlineKeyboardButton("↩️ Назад", callback_data="adm_broadcast")],
+    ]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def _start_broadcast_now(query, context, db_path: str) -> None:
+    """Создаёт broadcast и запускает рассылку через job_queue."""
+    from db.queries_posts import create_broadcast, get_recipients
+
+    tid = context.user_data.get("admin_telegram_id")
+    post_id: int = context.user_data.get("broadcast_post_id")
+    group: str = context.user_data.get("broadcast_group", "all")
+
+    recipients = await get_recipients(db_path, group)
+    total = len(recipients)
+
+    broadcast_id = await create_broadcast(
+        db_path=db_path,
+        admin_id=tid,
+        post_id=post_id,
+        target_group=group,
+        total_recipients=total,
+    )
+
+    group_labels = {"all": "Все", "active": "Активные", "bootcamp": "BOOTCAMP", "newbie": "Новички"}
+    progress_msg = await query.edit_message_text(
+        f"🚀 Рассылка #{broadcast_id} запущена!\n"
+        f"Группа: {group_labels.get(group, group)}, {total} получателей\n"
+        f"📤 Прогресс: 0/{total}..."
+    )
+
+    # Запускаем рассылку через job_queue (не блокирует event loop)
+    app = query.message.get_bot()
+    context.application.job_queue.run_once(
+        _broadcast_job,
+        when=1,
+        data={
+            "broadcast_id": broadcast_id,
+            "chat_id": query.message.chat_id,
+            "message_id": progress_msg.message_id,
+        },
+        name=f"broadcast_{broadcast_id}",
+    )
+
+
+async def _broadcast_job(context) -> None:
+    """PTB job: выполняет рассылку в фоне и обновляет прогресс в чате."""
+    from services.broadcast import run_broadcast
+
+    data = context.job.data
+    broadcast_id: int = data["broadcast_id"]
+    chat_id: int = data["chat_id"]
+    message_id: int = data["message_id"]
+    db_path: str = context.bot_data["db_path"]
+    webapp_base_url: str = context.bot_data["webapp_base_url"]
+
+    last_sent = [0]
+
+    async def on_progress(sent: int, failed: int, total: int) -> None:
+        # Обновляем сообщение не чаще раза на каждые 10 отправленных
+        if sent - last_sent[0] >= 10 or sent == total:
+            last_sent[0] = sent
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=(
+                        f"📤 Рассылка #{broadcast_id}\n"
+                        f"Отправлено: {sent}/{total}\n"
+                        f"Ошибок: {failed}"
+                    ),
+                )
+            except Exception:
+                pass
+
+    await run_broadcast(
+        db_path=db_path,
+        bot=context.bot,
+        broadcast_id=broadcast_id,
+        webapp_base_url=webapp_base_url,
+        progress_callback=on_progress,
+    )
+
+    # Финальное сообщение о завершении
+    from db.queries_posts import get_broadcast
+    bc = await get_broadcast(db_path, broadcast_id)
+    if bc:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=(
+                    f"✅ Рассылка #{broadcast_id} завершена!\n"
+                    f"📤 Отправлено: {bc['sent_count']}\n"
+                    f"❌ Ошибок: {bc['failed_count']}\n"
+                    f"👥 Всего: {bc['total_recipients']}"
+                ),
+            )
+        except Exception:
+            pass
+
+
+async def _show_broadcast_history(query, db_path: str) -> None:
+    from db.queries_posts import list_broadcasts
+    broadcasts = await list_broadcasts(db_path, limit=8)
+
+    status_icon = {"done": "✅", "sending": "📤", "pending": "⏳", "scheduled": "⏰", "failed": "❌"}
+    status_label = {
+        "done": "завершена", "sending": "отправляется",
+        "pending": "ожидает", "scheduled": "запланирована", "failed": "ошибка",
+    }
+    lines = ["📜 <b>История рассылок</b>\n"]
+
+    if not broadcasts:
+        lines.append("Рассылок не было.")
+    for b in broadcasts:
+        icon = status_icon.get(b["status"], "•")
+        total = b["total_recipients"] or 0
+        sent = b["sent_count"] or 0
+        failed = b["failed_count"] or 0
+        date = (b["created_at"] or "")[:10]
+        status = status_label.get(b["status"], b["status"])
+        lines.append(
+            f"{icon} #{b['id']} {escape((b['post_title'] or 'Без названия')[:25])}\n"
+            f"   {date} | {status} | {sent}/{total} (❌{failed})"
+        )
+
+    buttons = [[InlineKeyboardButton("↩️ Назад", callback_data="adm_broadcast")]]
+    await query.edit_message_text(
+        "\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Отмена / таймаут ConversationHandler
 # ---------------------------------------------------------------------------
@@ -667,33 +1224,30 @@ async def cancel_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 # ---------------------------------------------------------------------------
 
 def build_admin_handler() -> ConversationHandler:
+    text_only = filters.TEXT & ~filters.COMMAND
     return ConversationHandler(
         entry_points=[CommandHandler("admin", cmd_admin)],
         states={
-            SETUP_ADMIN_LOGIN: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, setup_admin_login)
-            ],
-            SETUP_ADMIN_PASSWORD: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, setup_admin_password)
-            ],
-            AWAIT_LOGIN: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, await_login)
-            ],
-            AWAIT_PASSWORD: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, await_password)
-            ],
+            SETUP_ADMIN_LOGIN:    [MessageHandler(text_only, setup_admin_login)],
+            SETUP_ADMIN_PASSWORD: [MessageHandler(text_only, setup_admin_password)],
+            AWAIT_LOGIN:          [MessageHandler(text_only, await_login)],
+            AWAIT_PASSWORD:       [MessageHandler(text_only, await_password)],
             MAIN_MENU: [
                 CallbackQueryHandler(main_menu_callback, pattern=r"^adm_"),
             ],
-            AWAIT_BAN_REASON: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, await_ban_reason)
-            ],
-            AWAIT_CANCEL_REASON: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, await_cancel_reason)
-            ],
-            AWAIT_CONTACT_VALUE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, await_contact_value)
-            ],
+            AWAIT_BAN_REASON:     [MessageHandler(text_only, await_ban_reason)],
+            AWAIT_CANCEL_REASON:  [MessageHandler(text_only, await_cancel_reason)],
+            AWAIT_CONTACT_VALUE:  [MessageHandler(text_only, await_contact_value)],
+            # Этап 6: создание новостей/акций
+            POST_TITLE:      [MessageHandler(text_only, post_title)],
+            POST_BODY:       [MessageHandler(text_only, post_body)],
+            POST_IMAGE:      [MessageHandler(text_only, post_image)],
+            POST_BTN_TEXT:   [MessageHandler(text_only, post_btn_text)],
+            POST_BTN_ACTION: [MessageHandler(text_only, post_btn_action)],
+            POST_PROMO:      [MessageHandler(text_only, post_promo)],
+            POST_DATES:      [MessageHandler(text_only, post_dates)],
+            # Этап 6: планирование рассылки
+            BROADCAST_SCHEDULE: [MessageHandler(text_only, broadcast_schedule)],
         },
         fallbacks=[CommandHandler("cancel", cancel_admin)],
         per_user=True,

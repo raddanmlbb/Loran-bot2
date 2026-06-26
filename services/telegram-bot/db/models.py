@@ -262,6 +262,24 @@ INDEXES_V3: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_pricing_zone         ON pricing(zone);",
 ]
 
+# Этап 6: миграция v4 — колонка post_id в broadcasts + индексы
+INDEXES_V4: list[str] = [
+    "CREATE INDEX IF NOT EXISTS idx_broadcasts_status      ON broadcasts(status);",
+    "CREATE INDEX IF NOT EXISTS idx_broadcasts_scheduled   ON broadcasts(scheduled_at);",
+    "CREATE INDEX IF NOT EXISTS idx_bcast_recipients_bid   ON broadcast_recipients(broadcast_id);",
+    "CREATE INDEX IF NOT EXISTS idx_posts_created_at       ON posts(created_at);",
+]
+
+MIGRATION_V4: list[str] = [
+    # post_id связывает рассылку с новостью
+    "ALTER TABLE broadcasts ADD COLUMN post_id INTEGER REFERENCES posts(id);",
+    # sent_at — момент реальной отправки
+    "ALTER TABLE broadcasts ADD COLUMN sent_at TIMESTAMP;",
+    # total_recipients — сколько получателей определено при запуске
+    "ALTER TABLE broadcasts ADD COLUMN total_recipients INTEGER DEFAULT 0;",
+    *INDEXES_V4,
+]
+
 MIGRATION_V1: list[str] = [
     SCHEMA_VERSION_TABLE,
     USERS_TABLE,
