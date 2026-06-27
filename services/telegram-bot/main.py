@@ -14,7 +14,7 @@ main.py — точка входа LORAN.CYBER Bot. Этап 5.
 
 Опциональные:
   DB_PATH, SENET_MODE, SENET_API_URL, SENET_API_KEY,
-  WEBAPP_BASE_URL, INITIAL_ADMIN_IDS
+  WEBAPP_BASE_URL, ⁸INITIAL_ADMIN_IDS
 """
 
 import logging
@@ -66,6 +66,7 @@ logger = logging.getLogger(__name__)
 # Job: обновление цен из Senet каждый час
 # ---------------------------------------------------------------------------
 
+
 async def _job_sync_prices(context) -> None:
     """Фоновая задача: синхронизация цен из Senet API раз в час."""
     db_path: str = context.bot_data["db_path"]
@@ -80,6 +81,7 @@ async def _job_sync_prices(context) -> None:
 async def _job_birthday_greetings(context) -> None:
     """Ежедневная задача: поздравления именинников."""
     from services.birthday import run_birthday_greetings
+
     db_path: str = context.bot_data["db_path"]
     try:
         await run_birthday_greetings(context.bot, db_path)
@@ -90,6 +92,7 @@ async def _job_birthday_greetings(context) -> None:
 async def _job_backup(context) -> None:
     """Ежедневная задача: резервное копирование БД."""
     from services.backup import run_backup
+
     db_path: str = context.bot_data["db_path"]
     try:
         await run_backup(context.bot, db_path)
@@ -131,6 +134,7 @@ async def _job_scheduled_broadcasts(context) -> None:
 # Регистрация хендлеров
 # ---------------------------------------------------------------------------
 
+
 def _register_handlers(app: Application) -> None:
     """
     Регистрирует все хендлеры PTB.
@@ -150,8 +154,8 @@ def _register_handlers(app: Application) -> None:
     app.add_handler(build_bday_inline_handler())
 
     # Команды
-    app.add_handler(CommandHandler("start",   cmd_start))
-    app.add_handler(CommandHandler("help",    cmd_help))
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("profile", cmd_profile))
 
     # Данные от Web App
@@ -160,18 +164,29 @@ def _register_handlers(app: Application) -> None:
     )
 
     # Кнопки Reply-клавиатуры
-    app.add_handler(MessageHandler(filters.Text([MESSAGES["btn_booking"]]),  handle_booking))
-    app.add_handler(MessageHandler(filters.Text([MESSAGES["btn_price"]]),    handle_price))
-    app.add_handler(MessageHandler(filters.Text([MESSAGES["btn_news"]]),     handle_news))
-    app.add_handler(MessageHandler(filters.Text([MESSAGES["btn_profile"]]),  handle_profile))
-    app.add_handler(MessageHandler(filters.Text([MESSAGES["btn_address"]]),  handle_address))
-    app.add_handler(MessageHandler(filters.Text([MESSAGES["btn_contacts"]]), handle_contacts))
-    app.add_handler(MessageHandler(filters.Text([MESSAGES["btn_register"]]), handle_register))
+    app.add_handler(
+        MessageHandler(filters.Text([MESSAGES["btn_booking"]]), handle_booking)
+    )
+    app.add_handler(MessageHandler(filters.Text([MESSAGES["btn_price"]]), handle_price))
+    app.add_handler(MessageHandler(filters.Text([MESSAGES["btn_news"]]), handle_news))
+    app.add_handler(
+        MessageHandler(filters.Text([MESSAGES["btn_profile"]]), handle_profile)
+    )
+    app.add_handler(
+        MessageHandler(filters.Text([MESSAGES["btn_address"]]), handle_address)
+    )
+    app.add_handler(
+        MessageHandler(filters.Text([MESSAGES["btn_contacts"]]), handle_contacts)
+    )
+    app.add_handler(
+        MessageHandler(filters.Text([MESSAGES["btn_register"]]), handle_register)
+    )
 
 
 # ---------------------------------------------------------------------------
 # Точка входа
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     """
@@ -186,7 +201,8 @@ def main() -> None:
 
     logger.info(
         "Конфигурация загружена. SENET_MODE=%s, DB_PATH=%s",
-        config.senet_mode, config.db_path,
+        config.senet_mode,
+        config.db_path,
     )
 
     # 2. Миграции БД (синхронно, до старта PTB)
@@ -204,18 +220,14 @@ def main() -> None:
     )
 
     # 4. Сборка Application с job_queue
-    app: Application = (
-        Application.builder()
-        .token(config.bot_token)
-        .build()
-    )
+    app: Application = Application.builder().token(config.bot_token).build()
 
     # Зависимости через bot_data
-    app.bot_data["db_path"]           = config.db_path
-    app.bot_data["webapp_base_url"]   = config.webapp_base_url
+    app.bot_data["db_path"] = config.db_path
+    app.bot_data["webapp_base_url"] = config.webapp_base_url
     app.bot_data["initial_admin_ids"] = config.initial_admin_ids
-    app.bot_data["config"]            = config
-    app.bot_data["senet"]             = senet
+    app.bot_data["config"] = config
+    app.bot_data["senet"] = senet
 
     # 5. Хендлеры
     _register_handlers(app)
@@ -230,12 +242,15 @@ def main() -> None:
         app.job_queue.run_repeating(_job_scheduled_broadcasts, interval=60, first=30)
         # Поздравления именинников — каждый день в 08:00 UTC (13:00 Астана)
         from datetime import time as dtime
+
         app.job_queue.run_daily(_job_birthday_greetings, time=dtime(hour=8, minute=0))
         # Резервное копирование — каждый день в 03:00 UTC (08:00 Астана)
         app.job_queue.run_daily(_job_backup, time=dtime(hour=3, minute=0))
         logger.info("Фоновые задачи зарегистрированы.")
     else:
-        logger.warning("job_queue недоступен — автообновление цен и рассылки отключены.")
+        logger.warning(
+            "job_queue недоступен — автообновление цен и рассылки отключены."
+        )
 
     logger.info("Бот запускается в режиме polling...")
 
