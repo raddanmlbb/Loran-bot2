@@ -255,11 +255,18 @@ def main() -> None:
     logger.info("Бот запускается в режиме polling...")
 
     # 7. Запуск
-    app.run_polling(
-        allowed_updates=["message", "callback_query"],
-        drop_pending_updates=True,
-    )
+ # Настройка Webhook для работы на BotHost
+ PORT = 8443
+ WEBHOOK_URL = "https://bot-1782577262-3322-illusionbaby.bothost.tech"  # Ссылка, которую дал вам BotHost
 
+ app.run_webhook(
+     listen="0.0.0.0",
+     port=PORT,
+     url_path="/webhook",
+     webhook_url=f"{WEBHOOK_URL}/webhook",
+     allowed_updates=["message", "callback_query"],
+     drop_pending_updates=True
+ )
 
 if __name__ == "__main__":
     main()
