@@ -240,33 +240,19 @@ def main() -> None:
         app.job_queue.run_repeating(_job_sync_prices, interval=3600, first=3605)
         # Проверка запланированных рассылок каждую минуту
         app.job_queue.run_repeating(_job_scheduled_broadcasts, interval=60, first=30)
-        # Поздравления именинников — каждый день в 08:00 UTC (13:00 Астана)
-        from datetime import time as dtime
+        # 7. Запуск
+        # Настройка Webhook для работы на BotHost
+    PORT = 8443
+    WEBHOOK_URL = "https://bot-1782577262-3322-illusionbaby.bothost.tech"
 
-        app.job_queue.run_daily(_job_birthday_greetings, time=dtime(hour=8, minute=0))
-        # Резервное копирование — каждый день в 03:00 UTC (08:00 Астана)
-        app.job_queue.run_daily(_job_backup, time=dtime(hour=3, minute=0))
-        logger.info("Фоновые задачи зарегистрированы.")
-    else:
-        logger.warning(
-            "job_queue недоступен — автообновление цен и рассылки отключены."
-        )
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path="/webhook",
+        webhook_url=f"{WEBHOOK_URL}/webhook",
+        allowed_updates=["message", "callback_query"],
+        drop_pending_updates=True
+    )
 
-    logger.info("Бот запускается в режиме polling...")
-
-    # 7. Запуск
- # Настройка Webhook для работы на BotHost
- PORT = 8443
- WEBHOOK_URL = "https://bot-1782577262-3322-illusionbaby.bothost.tech"  # Ссылка, которую дал вам BotHost
-
- app.run_webhook(
-     listen="0.0.0.0",
-     port=PORT,
-     url_path="/webhook",
-     webhook_url=f"{WEBHOOK_URL}/webhook",
-     allowed_updates=["message", "callback_query"],
-     drop_pending_updates=True
- )
-
-if __name__ == "__main__":
-    main()
+    if __name__ == "__main__":
+        main()
